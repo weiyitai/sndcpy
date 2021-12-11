@@ -1,5 +1,6 @@
 package com.rom1v.sndcpy;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -8,6 +9,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.graphics.drawable.Icon;
 import android.media.AudioAttributes;
@@ -20,6 +22,7 @@ import android.net.LocalServerSocket;
 import android.net.LocalSocket;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.Message;
 import android.util.Log;
 
@@ -39,7 +42,6 @@ public class RecordService extends Service {
 
     private static final String SOCKET_NAME = "sndcpy";
 
-
     private static final int SAMPLE_RATE = 48000;
     private static final int CHANNELS = 2;
 
@@ -58,9 +60,7 @@ public class RecordService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-
         Notification notification = createNotification(false);
-
         NotificationChannel channel = new NotificationChannel(CHANNEL_ID, getString(R.string.app_name), NotificationManager.IMPORTANCE_NONE);
         getNotificationManager().createNotificationChannel(channel);
 
@@ -106,7 +106,6 @@ public class RecordService extends Service {
         return notificationBuilder.build();
     }
 
-
     private Intent createStopIntent() {
         Intent intent = new Intent(this, RecordService.class);
         intent.setAction(ACTION_STOP);
@@ -147,26 +146,31 @@ public class RecordService extends Service {
         return builder.build();
     }
 
-    private static AudioRecord createAudioRecord(MediaProjection mediaProjection) {
-        AudioRecord.Builder builder = new AudioRecord.Builder();
-        builder.setAudioFormat(createAudioFormat());
-        builder.setBufferSizeInBytes(1024 * 1024);
-        builder.setAudioPlaybackCaptureConfig(createAudioPlaybackCaptureConfig(mediaProjection));
-        return builder.build();
+    private AudioRecord createAudioRecord(MediaProjection mediaProjection) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            AudioRecord.Builder builder = new AudioRecord.Builder();
+            builder.setAudioFormat(createAudioFormat());
+            builder.setBufferSizeInBytes(1024 * 1024);
+            builder.setAudioPlaybackCaptureConfig(createAudioPlaybackCaptureConfig(mediaProjection));
+            return builder.build();
+        }
+        return null;
     }
 
     private void startRecording() {
         final AudioRecord recorder = createAudioRecord(mediaProjection);
-
+        if (recorder == null) {
+            Log.e(TAG, "recorder == null");
+            return;
+        }
         recorderThread = new Thread(new Runnable() {
             @Override
             public void run() {
                 try (LocalSocket socket = connect()) {
                     handler.sendEmptyMessage(MSG_CONNECTION_ESTABLISHED);
-
                     recorder.startRecording();
-                    int BUFFER_MS = 15; // do not buffer more than BUFFER_MS milliseconds
-                    byte[] buf = new byte[SAMPLE_RATE * CHANNELS * BUFFER_MS / 1000];
+                    int bufferMs = 15; // do not buffer more than BUFFER_MS milliseconds
+                    byte[] buf = new byte[SAMPLE_RATE * CHANNELS * bufferMs / 1000];
                     while (true) {
                         int r = recorder.read(buf, 0, buf.length);
                         socket.getOutputStream().write(buf, 0, r);
@@ -205,6 +209,7 @@ public class RecordService extends Service {
         private RecordService service;
 
         ConnectionHandler(RecordService service) {
+            super(Looper.getMainLooper());
             this.service = service;
         }
 
